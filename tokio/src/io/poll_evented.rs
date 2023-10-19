@@ -7,6 +7,8 @@ use std::fmt;
 use std::io;
 use std::ops::Deref;
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::time::Duration;
+use std::time::Instant;
 
 cfg_io_driver! {
     /// Associates an I/O resource that implements the [`std::io::Read`] and/or
@@ -192,8 +194,17 @@ feature! {
         {
             use std::io::Write;
 
+            let threshold = Duration::from_secs(30);
+            let mut start = Instant::now();
             loop {
+                // ready! will return early if poll_write_ready returns Poll::Pending, therefore
+                // we don't need to reset start if we loop multiple times on Poll::Pending
                 let evt = ready!(self.registration.poll_write_ready(cx))?;
+
+                let elapsed = start.elapsed();
+                if elapsed > threshold {
+                    println!("WARNING!!! PollEvented::poll_write() waiting for poll event longer than {}s: {}ms", threshold.as_secs(), elapsed.as_millis());
+                }
 
                 match self.io.as_ref().unwrap().write(buf) {
                     Ok(n) => {
@@ -208,6 +219,8 @@ feature! {
                         return Poll::Ready(Ok(n));
                     },
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        // clearing readiness means we will wait again for a new event
+                        start = Instant::now();
                         self.registration.clear_readiness(evt);
                     }
                     Err(e) => return Poll::Ready(Err(e)),
